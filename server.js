@@ -1,7 +1,15 @@
 const WebSocket = require('ws');
-const wss = new WebSocket.Server({ port: process.env.PORT || 8080 });
+const http = require('http'); // Thêm thư viện web
 
-// Lưu trữ cấu trúc: rooms['Mã_Phòng'] = { players: Map(ID -> { ws, team, isReady, isHost }) }
+// 1. Tạo một trang web "giả" để Render kiểm tra sức khỏe
+const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('Tank Server is running OK!\n');
+});
+
+// 2. Gắn WebSocket Server vào cái cổng web đó
+const wss = new WebSocket.Server({ server });
+
 const rooms = {}; 
 
 function broadcastLobby(roomCode) {
@@ -19,14 +27,16 @@ function broadcastLobby(roomCode) {
     });
 }
 
-console.log("WebSocket Server (Lobby 5v5 Mode) đang chạy trên port 8080...");
+// Lắng nghe trên Port của Render
+const PORT = process.env.PORT || 8080;
+server.listen(PORT, () => {
+    console.log(`WebSocket Server (Lobby 5v5 Mode) đang chạy trên port ${PORT}...`);
+});
 
 wss.on('connection', function connection(ws) {
-    // Cấp cho mỗi người 1 ID ngẫu nhiên
     ws.id = Math.random().toString(36).substring(2, 9); 
     ws.room = null;
 
-    // Báo cho client biết ID của họ là gì
     ws.send(JSON.stringify({ type: 'your_id', id: ws.id }));
 
     ws.on('message', function incoming(message) {
@@ -50,7 +60,6 @@ wss.on('connection', function connection(ws) {
 
                 const isHost = room.players.size === 0; 
                 
-                // Tự động xếp team cho đều
                 let redCount = 0, blueCount = 0;
                 room.players.forEach(p => {
                     if (p.team === 'RED') redCount++;
@@ -61,7 +70,7 @@ wss.on('connection', function connection(ws) {
                 room.players.set(ws.id, {
                     ws: ws,
                     team: assignedTeam,
-                    isReady: isHost, // Chủ phòng luôn sẵn sàng
+                    isReady: isHost,
                     isHost: isHost
                 });
 
@@ -72,7 +81,6 @@ wss.on('connection', function connection(ws) {
                 if (ws.room && rooms[ws.room]) {
                     const p = rooms[ws.room].players.get(ws.id);
                     if (p) {
-                        // Đếm xem team muốn chuyển tới đã đủ 5 người chưa
                         let targetTeam = p.team === 'RED' ? 'BLUE' : 'RED';
                         let count = 0;
                         rooms[ws.room].players.forEach(player => { if (player.team === targetTeam) count++; });
@@ -99,7 +107,6 @@ wss.on('connection', function connection(ws) {
                     const p = room.players.get(ws.id);
                     
                     if (p && p.isHost) {
-                        // Kiểm tra tất cả đã ready chưa
                         let allReady = true;
                         room.players.forEach(player => {
                             if (!player.isReady) allReady = false;
@@ -116,9 +123,8 @@ wss.on('connection', function connection(ws) {
                 }
             }
             else {
-                // Nhận TẤT CẢ các loại dữ liệu in-game (move, shoot, hp) và Forward cho người khác
                 if (ws.room && rooms[ws.room]) {
-                    data.id = ws.id; // Gắn ID người gửi vào để máy khác biết xe nào vừa di chuyển
+                    data.id = ws.id; 
                     const packet = JSON.stringify(data);
                     
                     rooms[ws.room].players.forEach((p, id) => {
@@ -142,7 +148,6 @@ wss.on('connection', function connection(ws) {
                 delete rooms[ws.room];
                 console.log(`[!] Xóa phòng trống: ${ws.room}`);
             } else {
-                // Nếu chủ phòng thoát, chọn người khác làm chủ phòng (tính năng phụ)
                 let hasHost = false;
                 rooms[ws.room].players.forEach(p => { if (p.isHost) hasHost = true; });
                 if (!hasHost) {
